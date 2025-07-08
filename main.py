@@ -144,4 +144,7 @@ async def cmd_comptearebours(interaction: discord.Interaction, titre: str, date:
     except ValueError:
         await interaction.response.send_message("❌ Format de date invalide. Exemple : 2025-08-21 14:30", ephemeral=True)
 
-# ====== À SUIVRE : Commandes supplémentaires comme /note, /modif, /suppr à ajouter en bas ======
+# ====== DÉMARRAGE DU BOT ======
+
+if __name__ == "__main__":
+    bot.run(TOKEN)
