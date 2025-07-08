@@ -279,7 +279,7 @@ class EmbedEditorView(ui.View):
         await self.update_message()
 
 
-        @ui.button(label="Ajouter Image", style=discord.ButtonStyle.secondary)
+    @ui.button(label="Ajouter Image", style=discord.ButtonStyle.secondary)
     async def add_image(self, interaction: Interaction, button: ui.Button):
         await interaction.response.send_message("Envoie une **URL d'image ou GIF** valide :", ephemeral=True)
 
