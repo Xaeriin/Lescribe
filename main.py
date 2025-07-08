@@ -166,14 +166,21 @@ class MonBot(commands.Cog):
 
 async def main():
     await bot.add_cog(MonBot(bot))
+    await bot.start(os.getenv("TOKEN"))
 
-bot.loop.create_task(main())
-
+from flask import Flask
 app = Flask(__name__)
 
 @app.route("/")
 def home():
     return "Bot Discord actif."
+
+if __name__ == "__main__":
+    import threading
+    threading.Thread(target=lambda: app.run(host='0.0.0.0', port=10000)).start()
+    asyncio.run(main())
+
+
 
 if __name__ == "__main__":
     import threading
