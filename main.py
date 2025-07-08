@@ -5,13 +5,12 @@ import datetime
 import asyncio
 import os
 import threading
+import aiohttp
 from flask import Flask
 
 # ====== CONFIGURATION ======
 intents = discord.Intents.default()
 intents.message_content = True
-intents.members = True
-
 bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
 
@@ -22,12 +21,12 @@ if TOKEN is None:
     print("\u274c TOKEN non d\u00e9fini dans .env")
     exit(1)
 
-# ====== DONN\u00c9ES ======
-notes = {}  # Structure: {"plat": {"user_id": note, ...}}
-jeux = []
-films = []
+# ====== DONNÉES ======
+notes = {}  # Format : {nom_plat: {user_id: note, ...}}
 countdowns = []
 rappels = []
+films = []
+jeux = []
 
 # ====== FLASK POUR RENDER ======
 app = Flask(__name__)
@@ -42,51 +41,73 @@ def run_flask():
 
 threading.Thread(target=run_flask).start()
 
-# ====== UTILS ======
-def moyenne_notes(note_dict):
-    return round(sum(note_dict.values()) / len(note_dict), 2) if note_dict else 0
+# ====== ÉVÉNEMENTS ======
 
-async def get_username(guild, user_id):
-    try:
-        member = guild.get_member(user_id) or await guild.fetch_member(user_id)
-        return member.display_name
-    except:
-        return f"<@{user_id}>"
-
-# ====== \u00c9V\u00c9NEMENTS ======
 @bot.event
 async def on_ready():
     await tree.sync()
-    print(f"\u2705 Connect\u00e9 en tant que {bot.user}")
+    print(f"\u2705 Connecté en tant que {bot.user}")
     countdown_loop.start()
     rappel_loop.start()
+    check_free_games.start()
 
 # ====== COMMANDES ======
-@tree.command(name="note", description="Faire ou modifier une \u00e9valuation")
+
+@tree.command(name="note", description="Faire ou modifier une évaluation")
 @app_commands.describe(nom="Nom du plat", note="Note sur 10")
 async def cmd_note(interaction: discord.Interaction, nom: str, note: int):
     if not (0 <= note <= 10):
-        await interaction.response.send_message("Merci de donner une note entre 0 et 10.", ephemeral=True)
+        await interaction.response.send_message("Merci d'entrer une note entre 0 et 10.", ephemeral=True)
         return
 
-    user_id = interaction.user.id
+    user = interaction.user
     if nom not in notes:
         notes[nom] = {}
+    notes[nom][user.id] = note
 
-    notes[nom][user_id] = note
+    # Préparer l'embed
+    embed = discord.Embed(title=f"\ud83c\udf7d\ufe0f {nom}", color=0xf39c12)
+    total = 0
+    count = 0
+    for user_id, n in notes[nom].items():
+        member = await bot.fetch_user(user_id)
+        embed.add_field(name=member.name, value=f"{n}/10", inline=False)
+        total += n
+        count += 1
 
-    embed = discord.Embed(title=f"\ud83c\udf7d\ufe0f {nom}", color=0xffa500)
-
-    for uid, n in notes[nom].items():
-        username = await get_username(interaction.guild, uid)
-        embed.add_field(name=username, value=f"{n}/10", inline=False)
-
-    moyenne = moyenne_notes(notes[nom])
-    embed.add_field(name="\u2b50 Note moyenne", value=f"{moyenne}/10", inline=False)
-
+    moyenne = total / count
+    embed.add_field(name="\u2b50 Note moyenne", value=f"{moyenne:.1f}/10", inline=False)
     await interaction.response.send_message(embed=embed)
 
-@tree.command(name="supprnote", description="Supprimer une \u00e9valuation")
+@tree.command(name="classement", description="Voir le classement des plats")
+async def cmd_classement(interaction: discord.Interaction):
+    moyennes = {}
+    for nom, user_notes in notes.items():
+        if user_notes:
+            moyenne = sum(user_notes.values()) / len(user_notes)
+            moyennes[nom] = moyenne
+
+    classement = sorted(moyennes.items(), key=lambda x: x[1], reverse=True)
+    embed = discord.Embed(title="\ud83c\udf1f Classement des plats", color=0x2ecc71)
+    for nom, moyenne in classement:
+        embed.add_field(name=nom, value=f"{moyenne:.1f}/10", inline=False)
+    await interaction.response.send_message(embed=embed)
+
+@tree.command(name="notesperso", description="Voir ton classement perso")
+async def cmd_notesperso(interaction: discord.Interaction):
+    user_id = interaction.user.id
+    perso = [(nom, notes[nom][user_id]) for nom in notes if user_id in notes[nom]]
+    if not perso:
+        await interaction.response.send_message("Tu n'as noté aucun plat.", ephemeral=True)
+        return
+
+    perso.sort(key=lambda x: x[1], reverse=True)
+    embed = discord.Embed(title=f"\ud83d\udd8a\ufe0f Notes de {interaction.user.name}", color=0x3498db)
+    for nom, note in perso:
+        embed.add_field(name=nom, value=f"{note}/10", inline=False)
+    await interaction.response.send_message(embed=embed)
+
+@tree.command(name="supprnote", description="Supprimer une note")
 @app_commands.describe(nom="Nom du plat")
 async def cmd_supprnote(interaction: discord.Interaction, nom: str):
     user_id = interaction.user.id
@@ -94,105 +115,64 @@ async def cmd_supprnote(interaction: discord.Interaction, nom: str):
         del notes[nom][user_id]
         if not notes[nom]:
             del notes[nom]
-        await interaction.response.send_message(f"Note supprim\u00e9e pour **{nom}**.", ephemeral=True)
+        await interaction.response.send_message(f"Note supprimée pour **{nom}**.", ephemeral=True)
     else:
-        await interaction.response.send_message(f"Aucune note trouv\u00e9e pour **{nom}**.", ephemeral=True)
+        await interaction.response.send_message("Aucune note trouvée pour ce plat.", ephemeral=True)
 
-@tree.command(name="classement", description="Voir le classement des plats")
-async def cmd_classement(interaction: discord.Interaction):
-    if not notes:
-        await interaction.response.send_message("Aucune note enregistr\u00e9e.", ephemeral=True)
-        return
-
-    moyenne_dict = {nom: moyenne_notes(votes) for nom, votes in notes.items()}
-    classement = sorted(moyenne_dict.items(), key=lambda x: x[1], reverse=True)
-    embed = discord.Embed(title="\ud83c\udf1f Classement des plats", color=0x00ff00)
-    for nom, moyenne in classement:
-        embed.add_field(name=nom, value=f"{moyenne}/10", inline=False)
-    await interaction.response.send_message(embed=embed)
-
-@tree.command(name="notesperso", description="Voir tes notes personnelles")
-async def cmd_notesperso(interaction: discord.Interaction):
-    user_id = interaction.user.id
-    embed = discord.Embed(title=f"\ud83d\udc64 Notes de {interaction.user.display_name}", color=0x1abc9c)
-    for plat, votes in notes.items():
-        if user_id in votes:
-            embed.add_field(name=plat, value=f"{votes[user_id]}/10", inline=False)
-    await interaction.response.send_message(embed=embed, ephemeral=True)
-
-@tree.command(name="ajoutjeu", description="Ajouter un jeu")
+@tree.command(name="ajoutjeu", description="Ajouter un jeu à la liste")
 @app_commands.describe(nom="Nom du jeu", plateforme="Plateforme")
 async def cmd_ajoutjeu(interaction: discord.Interaction, nom: str, plateforme: str):
     jeux.append({"nom": nom, "plateforme": plateforme})
-    await interaction.response.send_message(f"Jeu **{nom}** ajout\u00e9 sur **{plateforme}**.", ephemeral=True)
+    await interaction.response.send_message(f"Jeu **{nom}** ajouté sur **{plateforme}**.", ephemeral=True)
 
 @tree.command(name="jeux", description="Voir la liste des jeux")
 async def cmd_jeux(interaction: discord.Interaction):
-    embed = discord.Embed(title="\ud83c\udfae Liste des jeux", color=0x7289da)
-    for jeu in jeux:
-        embed.add_field(name=jeu["nom"], value=jeu["plateforme"], inline=False)
-    await interaction.response.send_message(embed=embed)
-
-@tree.command(name="modifjeux", description="Modifier le titre et couleur de la liste des jeux")
-@app_commands.describe(titre="Nouveau titre", couleur_hex="Couleur hex (ex: #FF0000)")
-async def cmd_modifjeux(interaction: discord.Interaction, titre: str, couleur_hex: str):
-    try:
-        couleur = int(couleur_hex.lstrip("#"), 16)
-    except:
-        await interaction.response.send_message("Couleur invalide.", ephemeral=True)
+    if not jeux:
+        await interaction.response.send_message("La liste des jeux est vide.", ephemeral=True)
         return
-
-    embed = discord.Embed(title=titre, color=couleur)
+    embed = discord.Embed(title="\ud83c\udfae Liste des jeux", color=0x00ff00)
     for jeu in jeux:
         embed.add_field(name=jeu["nom"], value=jeu["plateforme"], inline=False)
     await interaction.response.send_message(embed=embed)
 
-@tree.command(name="embedcreer", description="Cr\u00e9er un embed personnalis\u00e9 avec interface interactive")
-async def cmd_embedcreer(interaction: discord.Interaction):
-    class EmbedEditor(discord.ui.View):
-        def __init__(self):
-            super().__init__(timeout=300)
-            self.embed = discord.Embed(title="Titre", description="Description", color=0x3498db)
+@tree.command(name="ajoutfilm", description="Ajouter un film ou une série")
+@app_commands.describe(titre="Titre du film/série", genre="Genre")
+async def cmd_ajoutfilm(interaction: discord.Interaction, titre: str, genre: str):
+    films.append({"titre": titre, "genre": genre})
+    await interaction.response.send_message(f"Film/Série **{titre}** ajouté(e) au genre **{genre}**.", ephemeral=True)
 
-        @discord.ui.button(label="Titre", style=discord.ButtonStyle.primary)
-        async def titre(self, interaction: discord.Interaction, button: discord.ui.Button):
-            await interaction.response.send_message("Quel est le nouveau titre ?", ephemeral=True)
-            msg = await bot.wait_for('message', check=lambda m: m.author == interaction.user, timeout=60)
-            self.embed.title = msg.content
-            await interaction.followup.send(embed=self.embed, ephemeral=True, view=self)
+@tree.command(name="films", description="Voir la liste des films/séries")
+async def cmd_films(interaction: discord.Interaction):
+    if not films:
+        await interaction.response.send_message("La liste est vide.", ephemeral=True)
+        return
+    embed = discord.Embed(title="\ud83c\udfac Films et séries", color=0x9b59b6)
+    for film in films:
+        embed.add_field(name=film["titre"], value=film["genre"], inline=False)
+    await interaction.response.send_message(embed=embed)
 
-        @discord.ui.button(label="Description", style=discord.ButtonStyle.secondary)
-        async def description(self, interaction: discord.Interaction, button: discord.ui.Button):
-            await interaction.response.send_message("Nouvelle description ?", ephemeral=True)
-            msg = await bot.wait_for('message', check=lambda m: m.author == interaction.user, timeout=60)
-            self.embed.description = msg.content
-            await interaction.followup.send(embed=self.embed, ephemeral=True, view=self)
+@tree.command(name="comptearebours", description="Créer un compte à rebours")
+@app_commands.describe(titre="Titre", date="Date/heure (YYYY-MM-DD HH:MM)")
+async def cmd_comptearebours(interaction: discord.Interaction, titre: str, date: str):
+    try:
+        dt = datetime.datetime.strptime(date, "%Y-%m-%d %H:%M")
+        countdowns.append({"titre": titre, "date": dt, "channel": interaction.channel_id})
+        await interaction.response.send_message(f"Compte à rebours **{titre}** créé pour {date}.", ephemeral=True)
+    except ValueError:
+        await interaction.response.send_message("Format invalide. Utilise YYYY-MM-DD HH:MM", ephemeral=True)
 
-        @discord.ui.button(label="Couleur", style=discord.ButtonStyle.success)
-        async def couleur(self, interaction: discord.Interaction, button: discord.ui.Button):
-            await interaction.response.send_message("Couleur hex ? (ex: #00ff00)", ephemeral=True)
-            msg = await bot.wait_for('message', check=lambda m: m.author == interaction.user, timeout=60)
-            try:
-                self.embed.color = discord.Color(int(msg.content.lstrip('#'), 16))
-            except:
-                pass
-            await interaction.followup.send(embed=self.embed, ephemeral=True, view=self)
+@tree.command(name="rappel", description="Mettre un rappel")
+@app_commands.describe(message="Message du rappel", date="Date/heure (YYYY-MM-DD HH:MM)")
+async def cmd_rappel(interaction: discord.Interaction, message: str, date: str):
+    try:
+        dt = datetime.datetime.strptime(date, "%Y-%m-%d %H:%M")
+        rappels.append({"message": message, "date": dt, "user": interaction.user.id})
+        await interaction.response.send_message(f"Rappel créé pour {date}.", ephemeral=True)
+    except ValueError:
+        await interaction.response.send_message("Format invalide. Utilise YYYY-MM-DD HH:MM", ephemeral=True)
 
-        @discord.ui.button(label="Envoyer", style=discord.ButtonStyle.green)
-        async def envoyer(self, interaction: discord.Interaction, button: discord.ui.Button):
-            await interaction.channel.send(embed=self.embed)
-            await interaction.response.send_message("Embed envoy\u00e9 !", ephemeral=True)
-            self.stop()
+# ====== TÂCHES DE FOND ======
 
-        @discord.ui.button(label="Annuler", style=discord.ButtonStyle.danger)
-        async def annuler(self, interaction: discord.Interaction, button: discord.ui.Button):
-            await interaction.response.send_message("Annul\u00e9.", ephemeral=True)
-            self.stop()
-
-    view = EmbedEditor()
-    await interaction.response.send_message("Edition de l'embed ci-dessous:", embed=view.embed, view=view, ephemeral=True)
-
-# ====== T\u00c2CHES DE FOND ======
 @tasks.loop(seconds=60)
 async def countdown_loop():
     now = datetime.datetime.now()
@@ -200,7 +180,7 @@ async def countdown_loop():
         if cd["date"] <= now:
             channel = bot.get_channel(cd["channel"])
             if channel:
-                await channel.send(f"\u23f0 **{cd['titre']}** est arriv\u00e9 !")
+                await channel.send(f"\u23f0 **{cd['titre']}** est arrivé !")
             countdowns.remove(cd)
 
 @tasks.loop(seconds=60)
@@ -215,6 +195,36 @@ async def rappel_loop():
                 except:
                     pass
             rappels.remove(r)
+
+@tasks.loop(hours=6)
+async def check_free_games():
+    global derniers_jeux_gratuits
+    url = "https://store-site-backend-static.ak.epicgames.com/freeGamesPromotions?locale=fr-FR&country=FR&allowCountries=FR"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as resp:
+                data = await resp.json()
+
+        jeux = data["data"]["Catalog"]["searchStore"]["elements"]
+        nouveaux_jeux = []
+
+        for jeu in jeux:
+            if jeu["promotions"] and jeu["title"] not in derniers_jeux_gratuits:
+                promos = jeu["promotions"]["promotionalOffers"]
+                if promos:
+                    titre = jeu["title"]
+                    lien = f"https://store.epicgames.com/fr/p/{jeu['productSlug']}"
+                    derniers_jeux_gratuits.add(titre)
+                    nouveaux_jeux.append((titre, lien))
+
+        if nouveaux_jeux:
+            channel = bot.get_channel(FREE_GAMES_CHANNEL_ID)
+            if channel:
+                for titre, lien in nouveaux_jeux:
+                    await channel.send(f"\ud83c\udf81 **Jeu gratuit** : **{titre}**\n{lien}")
+
+    except Exception as e:
+        print(f"Erreur dans check_free_games : {e}")
 
 # ====== LANCEMENT ======
 bot.run(TOKEN)
