@@ -278,6 +278,24 @@ class EmbedEditorView(ui.View):
         await interaction.followup.send(f"Couleur modifiée en #{color_hex.upper()}.", ephemeral=True)
         await self.update_message()
 
+
+        @ui.button(label="Ajouter Image", style=discord.ButtonStyle.secondary)
+    async def add_image(self, interaction: Interaction, button: ui.Button):
+        await interaction.response.send_message("Envoie une **URL d'image ou GIF** valide :", ephemeral=True)
+
+        def check(m):
+            return m.author.id == interaction.user.id and m.channel == interaction.channel and m.content.startswith("http")
+
+        try:
+            msg = await bot.wait_for('message', check=check, timeout=60)
+        except asyncio.TimeoutError:
+            await interaction.followup.send("⏳ Temps écoulé ou URL invalide.", ephemeral=True)
+            return
+        self.embed.set_image(url=msg.content)
+        await interaction.followup.send("✅ Image ajoutée à l'embed.", ephemeral=True)
+        await self.update_message()
+
+
     @ui.button(label="Sauvegarder", style=discord.ButtonStyle.success)
     async def save_embed(self, interaction: Interaction, button: ui.Button):
         embeds_saved[self.name] = self.embed.to_dict()
@@ -338,7 +356,11 @@ async def comptearebours(interaction: Interaction, temps: str):
     end = start + secondes
     msg = await interaction.original_response()
 
+        task = asyncio.create_task(asyncio.sleep(0))  # dummy pour déclaration
+    comptearebours_tasks[interaction.user.id] = asyncio.current_task()
+
     while True:
+
         now = asyncio.get_event_loop().time()
         reste = int(end - now)
         if reste <= 0:
@@ -358,6 +380,19 @@ async def comptearebours(interaction: Interaction, temps: str):
     # Fin du compte à rebours
     await msg.edit(embed=Embed(title="Compte à rebours terminé !", color=0x32CD32))
     await interaction.channel.send("⏰ Le compte à rebours est terminé!")
+
+# compte à rebours stop
+@tree.command(name="compteareboursstop", description="Annule ton compte à rebours en cours")
+async def compteareboursstop(interaction: Interaction):
+    task = comptearebours_tasks.pop(interaction.user.id, None)
+    if task and not task.done():
+        task.cancel()
+        await interaction.response.send_message("⛔ Ton compte à rebours a été annulé.")
+    else:
+        await interaction.response.send_message("❌ Aucun compte à rebours en cours.", ephemeral=True)
+
+comptearebours_tasks = {}
+
 
 # --- Events ---
 @bot.event
