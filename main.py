@@ -355,8 +355,8 @@ async def comptearebours(interaction: Interaction, temps: str):
     start = asyncio.get_event_loop().time()
     end = start + secondes
     msg = await interaction.original_response()
-        task = asyncio.create_task(asyncio.sleep(0))  # dummy pour déclaration
-        comptearebours_tasks[interaction.user.id] = asyncio.current_task()
+    task = asyncio.create_task(asyncio.sleep(0))  # dummy pour déclaration
+    comptearebours_tasks[interaction.user.id] = asyncio.current_task()
     while True:
         now = asyncio.get_event_loop().time()
         reste = int(end - now)
