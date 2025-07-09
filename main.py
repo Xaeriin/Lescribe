@@ -74,44 +74,50 @@ async def note(interaction: Interaction, plat: str, note: int):
 
     user_id = interaction.user.id
     user_display = interaction.user.display_name
-
-    # Enregistrer la note de l'utilisateur
     user_notes = notes.setdefault(user_id, {})
     user_notes[plat] = note
 
-    # Rechercher une autre note pour ce plat
-    other_user_note = None
-    other_user_display = None
+    # Chercher autre note
+    other_note = None
+    other_display = None
     for uid, plats in notes.items():
         if uid != user_id and plat in plats:
             member = interaction.guild.get_member(uid)
             if member:
-                other_user_note = plats[plat]
-                other_user_display = member.display_name
+                other_note = plats[plat]
+                other_display = member.display_name
                 break
 
-    # Calcul de la moyenne
     total, count = note, 1
-    if other_user_note is not None:
-        total += other_user_note
+    if other_note is not None:
+        total += other_note
         count += 1
     moyenne = round(total / count, 2)
 
-    # Construction de l'embed
-    embed = Embed(
-        title=f"🍽️ Note pour '{plat}'",
-        color=0x8FBC8F
-    )
-
-    if other_user_note is not None:
-        embed.add_field(name="🧙🏼‍♂️ " + other_user_display, value=f"{other_user_note}/10", inline=False)
+    embed = Embed(title=f"🍽️ Note pour '{plat}'", color=0x8FBC8F)
+    if other_note is not None:
+        embed.add_field(name="🧙🏼‍♂️ " + other_display, value=f"{other_note}/10", inline=False)
     else:
         embed.add_field(name="🧙🏼‍♂️ En attente...", value="Pas encore de note", inline=False)
-
     embed.add_field(name="🧝🏼‍♀️ " + user_display, value=f"{note}/10", inline=False)
     embed.add_field(name="📜 Moyenne", value=f"{moyenne}/10", inline=False)
 
-    await interaction.response.send_message(embed=embed)
+    # Mise à jour du message si existe
+    channel = interaction.channel
+    message_id = note_embeds.get(plat)
+    if message_id:
+        try:
+            old_msg = await channel.fetch_message(message_id)
+            await old_msg.edit(embed=embed)
+            await interaction.response.send_message("Note mise à jour !", ephemeral=True)
+            return
+        except discord.NotFound:
+            pass  # Message supprimé manuellement
+
+    # Sinon : nouvel embed
+    new_msg = await interaction.channel.send(embed=embed)
+    note_embeds[plat] = new_msg.id
+    await interaction.response.send_message("Note enregistrée !", ephemeral=True)
 
 
 # /notesperso : afficher toutes ses notes
@@ -131,11 +137,50 @@ async def notesperso(interaction: Interaction):
 @app_commands.describe(plat="Nom du plat à supprimer")
 async def supprnote(interaction: Interaction, plat: str):
     user_notes = notes.get(interaction.user.id, {})
-    if plat in user_notes:
-        del user_notes[plat]
-        await interaction.response.send_message(f"Note supprimée pour {plat}.")
+    if plat not in user_notes:
+        await interaction.response.send_message("Tu n'as pas de note pour ce plat.", ephemeral=True)
+        return
+
+    del user_notes[plat]
+
+    # Vérifier s'il reste des notes pour ce plat
+    autres_notes = []
+    for uid, plats in notes.items():
+        if plat in plats:
+            autres_notes.append((uid, plats[plat]))
+
+    channel = interaction.channel
+    message_id = note_embeds.get(plat)
+
+    if not autres_notes:
+        # Supprimer le message s’il existe
+        if message_id:
+            try:
+                msg = await channel.fetch_message(message_id)
+                await msg.delete()
+            except discord.NotFound:
+                pass
+            note_embeds.pop(plat, None)
+        await interaction.response.send_message(f"Ta note et l'embed pour '{plat}' ont été supprimés.")
     else:
-        await interaction.response.send_message(f"Tu n'as pas de note pour {plat}.", ephemeral=True)
+        uid, note_val = autres_notes[0]
+        member = interaction.guild.get_member(uid)
+        display_name = member.display_name if member else "Inconnu"
+        moyenne = round(note_val, 2)
+
+        embed = Embed(title=f"🍽️ Note pour '{plat}'", color=0x8FBC8F)
+        embed.add_field(name="🧙🏼‍♂️ " + display_name, value=f"{note_val}/10", inline=False)
+        embed.add_field(name="🧝🏼‍♀️ En attente...", value="Pas encore de note", inline=False)
+        embed.add_field(name="📜 Moyenne", value=f"{moyenne}/10", inline=False)
+
+        if message_id:
+            try:
+                msg = await channel.fetch_message(message_id)
+                await msg.edit(embed=embed)
+            except discord.NotFound:
+                pass
+        await interaction.response.send_message("Ta note a été supprimée.", ephemeral=True)
+
 
 # /classement : afficher le classement des plats selon moyenne
 @tree.command(name="classement", description="Afficher le classement des plats")
