@@ -31,6 +31,8 @@ films = []        # liste de dicts {nom: str, description: str}
 jeux = []         # liste de dicts {nom: str, description: str}
 rappels = []      # liste de rappels (simple)
 embeds_saved = {} # {embed_name: dict embed}
+note_embeds = {}  # clé = nom du plat, valeur = discord.Message
+
 
 # --- Utilitaires ---
 
@@ -65,37 +67,41 @@ def parse_duration(text: str) -> int:
 # --- Commandes ---
 
 # /note
-@tree.command(name="note", description="Noter un plat avec ton partenaire")
-@app_commands.describe(plat="Nom du plat", note="Note sur 10")
-async def note(interaction: Interaction, plat: str, note: int):
-    if not (0 <= note <= 10):
-        await interaction.response.send_message("❌ La note doit être entre 0 et 10.", ephemeral=True)
-        return
+@tree.command(name="note")
+async def noter(interaction: discord.Interaction, plat: str, note: float):
+    user_id = str(interaction.user.id)
+    username = interaction.user.display_name
 
-    # Enregistrer la note
-    user_notes = notes.setdefault(interaction.user.id, {})
-    user_notes[plat] = note
+    if plat not in notes:
+        notes[plat] = {}
 
-    # Récupérer toutes les notes du plat
-    total, count = 0, 0
-    evaluations = []  # Liste des évaluations à afficher
-    for user_id, plats in notes.items():
-        if plat in plats:
-            user = await bot.fetch_user(user_id)
-            user_note = plats[plat]
-            evaluations.append((user.display_name, user_note))
-            total += user_note
-            count += 1
+    notes[plat][user_id] = note
 
-    moyenne = round(total / count, 2) if count else "N/A"
+    # Générer l'embed avec toutes les notes pour ce plat
+    evaluations = [(username if uid == user_id else await bot.fetch_user(int(uid))).display_name, n]
+                  for uid, n in notes[plat].items()]
+    moyenne = round(sum(n for _, n in evaluations) / len(evaluations), 2)
 
-    # Créer l'embed
-    embed = Embed(title=f"🍽️ Note pour **{plat}**", color=0x8FBC8F)
+    embed = discord.Embed(title=f"🍽️ Note pour **{plat}**", color=0x8FBC8F)
     for nom, n in evaluations:
         embed.add_field(name=f"👤 {nom}", value=f"⭐ {n}/10", inline=False)
     embed.add_field(name="📊 Moyenne", value=f"**{moyenne}/10**", inline=False)
 
-    await interaction.response.send_message(embed=embed)
+    # Soit modifier l'ancien message, soit en créer un nouveau
+    if plat in note_embeds:
+        try:
+            msg = note_embeds[plat]
+            await msg.edit(embed=embed)
+            await interaction.response.send_message(f"✅ Ta note pour **{plat}** a été mise à jour !", ephemeral=True)
+        except discord.NotFound:
+            # Si le message n'existe plus, on en recrée un
+            new_msg = await interaction.channel.send(embed=embed)
+            note_embeds[plat] = new_msg
+            await interaction.response.send_message(f"✅ Note mise à jour et nouveau message créé pour **{plat}**.", ephemeral=True)
+    else:
+        new_msg = await interaction.channel.send(embed=embed)
+        note_embeds[plat] = new_msg
+        await interaction.response.send_message(f"✅ Ta note a été enregistrée pour **{plat}**.", ephemeral=True)
 
 
 # /notesperso
