@@ -91,7 +91,12 @@ async def note(interaction: Interaction, plat: str, note: int):
                 other_note = plats[plat]
                 other_display = member.display_name
                 break
-
+# Calcul de la moyenne
+    notes_pour_plat = [n for plats in notes.values() if plat in plats for n in [plats[plat]]]
+    total = sum(notes_pour_plat)
+    count = len(notes_pour_plat)
+    moyenne = round(total / count, 2) if count > 0 else 0
+    
     # Création de l'embed avec le format que tu veux
     embed = Embed(title=f"🍽️ Note pour '{plat}'", color=0x8FBC8F)
     if other_note is not None:
