@@ -31,6 +31,8 @@ films = []        # liste de dicts {nom: str, description: str}
 jeux = []         # liste de dicts {nom: str, description: str}
 rappels = []      # liste de rappels (simple)
 embeds_saved = {} # {embed_name: dict embed}
+# Structure pour stocker message_id des embeds par plat
+note_embeds = {}  # {plat: message_id}
 
 # --- Utilitaires ---
 
@@ -74,49 +76,47 @@ async def note(interaction: Interaction, plat: str, note: int):
 
     user_id = interaction.user.id
     user_display = interaction.user.display_name
+
+    # Enregistrer/modifier la note utilisateur
     user_notes = notes.setdefault(user_id, {})
     user_notes[plat] = note
 
-    # Chercher autre note
-    other_note = None
-    other_display = None
+    # Regrouper toutes les notes pour ce plat
+    notes_pour_plat = []
     for uid, plats in notes.items():
-        if uid != user_id and plat in plats:
+        if plat in plats:
             member = interaction.guild.get_member(uid)
             if member:
-                other_note = plats[plat]
-                other_display = member.display_name
-                break
+                notes_pour_plat.append((member.display_name, plats[plat]))
 
-    total, count = note, 1
-    if other_note is not None:
-        total += other_note
-        count += 1
-    moyenne = round(total / count, 2)
+    # Calcul de la moyenne
+    total = sum(n for _, n in notes_pour_plat)
+    count = len(notes_pour_plat)
+    moyenne = round(total / count, 2) if count > 0 else 0
 
-    embed = Embed(title=f"🍽️ Note pour '{plat}'", color=0x8FBC8F)
-    if other_note is not None:
-        embed.add_field(name="🧙🏼‍♂️ " + other_display, value=f"{other_note}/10", inline=False)
-    else:
-        embed.add_field(name="🧙🏼‍♂️ En attente...", value="Pas encore de note", inline=False)
-    embed.add_field(name="🧝🏼‍♀️ " + user_display, value=f"{note}/10", inline=False)
+    # Création de l'embed avec toutes les notes
+    embed = Embed(title=f"🍽️ Notes pour '{plat}'", color=0x8FBC8F)
+    for display_name, n in notes_pour_plat:
+        embed.add_field(name=display_name, value=f"{n}/10", inline=False)
     embed.add_field(name="📜 Moyenne", value=f"{moyenne}/10", inline=False)
 
-    # Mise à jour du message si existe
     channel = interaction.channel
     message_id = note_embeds.get(plat)
+
     if message_id:
+        # Essayer de modifier le message existant
         try:
-            old_msg = await channel.fetch_message(message_id)
-            await old_msg.edit(embed=embed)
+            msg = await channel.fetch_message(message_id)
+            await msg.edit(embed=embed)
             await interaction.response.send_message("Note mise à jour !", ephemeral=True)
             return
         except discord.NotFound:
-            pass  # Message supprimé manuellement
+            # Message supprimé manuellement, on supprime la clé pour recréer
+            note_embeds.pop(plat, None)
 
-    # Sinon : nouvel embed
-    new_msg = await interaction.channel.send(embed=embed)
-    note_embeds[plat] = new_msg.id
+    # Sinon créer un nouveau message embed et stocker l'ID
+    msg = await channel.send(embed=embed)
+    note_embeds[plat] = msg.id
     await interaction.response.send_message("Note enregistrée !", ephemeral=True)
 
 
@@ -136,24 +136,29 @@ async def notesperso(interaction: Interaction):
 @tree.command(name="supprnote", description="Supprimer une note pour un plat")
 @app_commands.describe(plat="Nom du plat à supprimer")
 async def supprnote(interaction: Interaction, plat: str):
-    user_notes = notes.get(interaction.user.id, {})
+    user_id = interaction.user.id
+    user_notes = notes.get(user_id, {})
+
     if plat not in user_notes:
         await interaction.response.send_message("Tu n'as pas de note pour ce plat.", ephemeral=True)
         return
 
+    # Supprimer la note utilisateur
     del user_notes[plat]
 
-    # Vérifier s'il reste des notes pour ce plat
-    autres_notes = []
+    # Regrouper toutes les notes restantes pour ce plat
+    notes_pour_plat = []
     for uid, plats in notes.items():
         if plat in plats:
-            autres_notes.append((uid, plats[plat]))
+            member = interaction.guild.get_member(uid)
+            if member:
+                notes_pour_plat.append((member.display_name, plats[plat]))
 
     channel = interaction.channel
     message_id = note_embeds.get(plat)
 
-    if not autres_notes:
-        # Supprimer le message s’il existe
+    if not notes_pour_plat:
+        # Plus aucune note, supprimer le message embed
         if message_id:
             try:
                 msg = await channel.fetch_message(message_id)
@@ -161,25 +166,28 @@ async def supprnote(interaction: Interaction, plat: str):
             except discord.NotFound:
                 pass
             note_embeds.pop(plat, None)
-        await interaction.response.send_message(f"Ta note et l'embed pour '{plat}' ont été supprimés.")
-    else:
-        uid, note_val = autres_notes[0]
-        member = interaction.guild.get_member(uid)
-        display_name = member.display_name if member else "Inconnu"
-        moyenne = round(note_val, 2)
+        await interaction.response.send_message(f"Ta note et l'embed pour '{plat}' ont été supprimés.", ephemeral=True)
+        return
 
-        embed = Embed(title=f"🍽️ Note pour '{plat}'", color=0x8FBC8F)
-        embed.add_field(name="🧙🏼‍♂️ " + display_name, value=f"{note_val}/10", inline=False)
-        embed.add_field(name="🧝🏼‍♀️ En attente...", value="Pas encore de note", inline=False)
-        embed.add_field(name="📜 Moyenne", value=f"{moyenne}/10", inline=False)
+    # Sinon, on met à jour l'embed avec les notes restantes
+    total = sum(n for _, n in notes_pour_plat)
+    count = len(notes_pour_plat)
+    moyenne = round(total / count, 2)
 
-        if message_id:
-            try:
-                msg = await channel.fetch_message(message_id)
-                await msg.edit(embed=embed)
-            except discord.NotFound:
-                pass
-        await interaction.response.send_message("Ta note a été supprimée.", ephemeral=True)
+    embed = Embed(title=f"🍽️ Notes pour '{plat}'", color=0x8FBC8F)
+    for display_name, n in notes_pour_plat:
+        embed.add_field(name=display_name, value=f"{n}/10", inline=False)
+    embed.add_field(name="📜 Moyenne", value=f"{moyenne}/10", inline=False)
+
+    if message_id:
+        try:
+            msg = await channel.fetch_message(message_id)
+            await msg.edit(embed=embed)
+        except discord.NotFound:
+            # Message supprimé manuellement, on supprime la clé
+            note_embeds.pop(plat, None)
+
+    await interaction.response.send_message("Ta note a été supprimée et l'embed mis à jour.", ephemeral=True)
 
 
 # /classement : afficher le classement des plats selon moyenne
