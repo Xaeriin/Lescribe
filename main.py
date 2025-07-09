@@ -116,7 +116,6 @@ async def note(interaction: discord.Interaction, plat: str, note: float):
         embed.description = description
         embed.clear_fields()
         for user, n in notes.items():
-            embed.add_field(name=user, value=f"{n}/10", inline=False)
 
         await message_reference.edit(embed=embed)
         await interaction.followup.send("Ta note a été mise à jour.", ephemeral=True)
