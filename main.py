@@ -355,7 +355,7 @@ def main():
     # Lancer Flask dans un thread
     threading.Thread(target=run_flask).start()
     # Lancer Discord bot
-    TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+    TOKEN = os.getenv("TOKEN")
     if not TOKEN:
         print("Pas de token dans les variables d'environnement.")
         return
