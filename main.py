@@ -137,27 +137,79 @@ async def note(interaction: discord.Interaction, plat: str, note: float):
 
 
 # /notesperso
-@tree.command(name="notesperso", description="Afficher toutes tes notes de plats")
-async def notesperso(interaction: Interaction):
-    user_notes = notes.get(interaction.user.id, {})
-    if not user_notes:
-        await interaction.response.send_message("Tu n'as pas encore noté de plat.", ephemeral=True)
-        return
-    embed = Embed(title=f"Tes notes de plats", color=0xFFD700)
-    for plat, note in user_notes.items():
-        embed.add_field(name=plat, value=f"{note}/10", inline=False)
-    await interaction.response.send_message(embed=embed)
+@bot.tree.command(name="notesperso", description="Affiche toutes tes notes données aux plats.")
+async def notesperso(interaction: discord.Interaction):
+    await interaction.response.defer()
+    username = interaction.user.display_name
+    notes = []
+
+    async for message in interaction.channel.history(limit=100):
+        if message.author != bot.user or not message.embeds:
+            continue
+        embed = message.embeds[0]
+        plat = embed.title.replace("🍽️ Dégustation : ", "")
+        for field in embed.fields:
+            if field.name == username:
+                note = field.value.replace("/10", "")
+                notes.append((plat, note))
+                break
+
+    if notes:
+        notes.sort(key=lambda x: float(x[1]), reverse=True)
+        desc = "\n".join([f"**{plat}** : {note}/10" for plat, note in notes])
+        embed = discord.Embed(
+            title=f"📜 Tes évaluations, {username}",
+            description=desc,
+            color=discord.Color.gold()
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+    else:
+        await interaction.followup.send("Tu n’as encore noté aucun plat.", ephemeral=True)
+
 
 # /supprnote
-@tree.command(name="supprnote", description="Supprimer une note pour un plat")
-@app_commands.describe(plat="Nom du plat à supprimer")
-async def supprnote(interaction: Interaction, plat: str):
-    user_notes = notes.get(interaction.user.id, {})
-    if plat in user_notes:
-        del user_notes[plat]
-        await interaction.response.send_message(f"Note supprimée pour {plat}.")
-    else:
-        await interaction.response.send_message(f"Tu n'as pas de note pour {plat}.", ephemeral=True)
+@bot.tree.command(name="supprnote", description="Supprime ta note pour un plat donné.")
+@app_commands.describe(plat="Nom du plat dont tu veux supprimer ta note")
+async def supprnote(interaction: discord.Interaction, plat: str):
+    await interaction.response.defer()
+    username = interaction.user.display_name
+    user_id = str(interaction.user.id)
+    channel = interaction.channel
+
+    async for message in channel.history(limit=100):
+        if message.author != bot.user or not message.embeds:
+            continue
+
+        embed = message.embeds[0]
+
+        if embed.title == f"🍽️ Dégustation : {plat}":
+            notes = {field.name: float(field.value.replace("/10", "")) for field in embed.fields}
+
+            if username in notes:
+                del notes[username]
+
+                if notes:
+                    moyenne = round(sum(notes.values()) / len(notes), 2)
+                    emoji_note = "🧺"
+                    emoji_moyenne = "🍯"
+                    desc = f"{emoji_note} **Nom du plat** : {plat}\n"
+                    for user, n in notes.items():
+                        desc += f"**{user}** : {n}/10\n"
+                    desc += f"{emoji_moyenne} **Moyenne** : {moyenne}/10"
+
+                    embed.description = desc
+                    embed.clear_fields()
+                    for user, n in notes.items():
+                        embed.add_field(name=user, value=f"{n}/10", inline=False)
+                    await message.edit(embed=embed)
+                    await interaction.followup.send("Ta note a été supprimée.", ephemeral=True)
+                else:
+                    await message.delete()
+                    await interaction.followup.send("Ta note a été supprimée. Le plat n'a plus de notes, l'embed a été supprimé.", ephemeral=True)
+                return
+
+    await interaction.followup.send("Aucune note trouvée pour ce plat.", ephemeral=True)
+
 
 # /supprjeu (ajout)
 @tree.command(name="supprjeu", description="Supprimer un jeu de la liste")
@@ -244,22 +296,37 @@ async def ajoutjeu(interaction: Interaction, nom: str, description: str):
     await interaction.response.send_message(f"Jeu '{nom}' ajouté.")
 
 # /classement (classement des plats selon moyenne)
-@tree.command(name="classement", description="Afficher le classement des plats")
-async def classement(interaction: Interaction):
-    moyenne_plats = {}
-    counts = {}
-    for user_id, plats in notes.items():
-        for plat, note in plats.items():
-            moyenne_plats[plat] = moyenne_plats.get(plat, 0) + note
-            counts[plat] = counts.get(plat, 0) + 1
-    if not moyenne_plats:
-        await interaction.response.send_message("Aucune note de plat pour l'instant.", ephemeral=True)
-        return
-    classement = sorted(((plat, moyenne_plats[plat]/counts[plat]) for plat in moyenne_plats), key=lambda x: x[1], reverse=True)
-    embed = Embed(title="Classement des plats", color=0xFFD700)
-    for plat, moyenne in classement:
-        embed.add_field(name=plat, value=f"Moyenne: {moyenne:.2f}/10", inline=False)
-    await interaction.response.send_message(embed=embed)
+@bot.tree.command(name="classement", description="Affiche le classement des plats selon vos moyennes.")
+async def classement(interaction: discord.Interaction):
+    await interaction.response.defer()
+    plats = []
+
+    async for message in interaction.channel.history(limit=100):
+        if message.author != bot.user or not message.embeds:
+            continue
+        embed = message.embeds[0]
+        if not embed.title or not embed.fields:
+            continue
+        plat = embed.title.replace("🍽️ Dégustation : ", "")
+        try:
+            moyenne_line = embed.description.splitlines()[-1]
+            moyenne = float(moyenne_line.split(":")[1].replace("/10", "").strip())
+            plats.append((plat, moyenne))
+        except Exception:
+            continue
+
+    if plats:
+        plats.sort(key=lambda x: x[1], reverse=True)
+        desc = "\n".join([f"**{i+1}. {plat}** — {moy:.2f}/10" for i, (plat, moy) in enumerate(plats)])
+        embed = discord.Embed(
+            title="🏆 Classement des plats",
+            description=desc,
+            color=discord.Color.green()
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+    else:
+        await interaction.followup.send("Aucune note n’a encore été enregistrée.", ephemeral=True)
+
 
 # --- Embed Creator & Modifier avec interface interactive ---
 
