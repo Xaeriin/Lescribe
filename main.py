@@ -71,18 +71,48 @@ async def note(interaction: Interaction, plat: str, note: int):
     if not (0 <= note <= 10):
         await interaction.response.send_message("La note doit être entre 0 et 10.", ephemeral=True)
         return
-    user_notes = notes.setdefault(interaction.user.id, {})
-    user_notes[plat] = note
-    total, count = 0, 0
-    for user_id, plats in notes.items():
-        if plat in plats:
-            total += plats[plat]
-            count += 1
-    moyenne = round(total / count, 2) if count else "N/A"
 
-    embed = Embed(title=f"Note pour {plat}", description=f"Moyenne actuelle: {moyenne}/10", color=0x8FBC8F)
-    embed.add_field(name=f"{interaction.user.display_name}", value=f"Ta note : {note}/10", inline=False)
+    user_id = interaction.user.id
+    user_display = interaction.user.display_name
+
+    # Enregistrer la note de l'utilisateur
+    user_notes = notes.setdefault(user_id, {})
+    user_notes[plat] = note
+
+    # Rechercher une autre note pour ce plat
+    other_user_note = None
+    other_user_display = None
+    for uid, plats in notes.items():
+        if uid != user_id and plat in plats:
+            member = interaction.guild.get_member(uid)
+            if member:
+                other_user_note = plats[plat]
+                other_user_display = member.display_name
+                break
+
+    # Calcul de la moyenne
+    total, count = note, 1
+    if other_user_note is not None:
+        total += other_user_note
+        count += 1
+    moyenne = round(total / count, 2)
+
+    # Construction de l'embed
+    embed = Embed(
+        title=f"🍽️ Note pour '{plat}'",
+        color=0x8FBC8F
+    )
+
+    if other_user_note is not None:
+        embed.add_field(name="🧙🏼‍♂️ " + other_user_display, value=f"{other_user_note}/10", inline=False)
+    else:
+        embed.add_field(name="🧙🏼‍♂️ En attente...", value="Pas encore de note", inline=False)
+
+    embed.add_field(name="🧝🏼‍♀️ " + user_display, value=f"{note}/10", inline=False)
+    embed.add_field(name="📜 Moyenne", value=f"{moyenne}/10", inline=False)
+
     await interaction.response.send_message(embed=embed)
+
 
 # /notesperso : afficher toutes ses notes
 @tree.command(name="notesperso", description="Afficher toutes tes notes de plats")
