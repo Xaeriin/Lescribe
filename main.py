@@ -65,6 +65,7 @@ def parse_duration(text: str) -> int:
 # --- Commandes ---
 
 # /note
+# /note
 @bot.tree.command(name="note", description="Note un plat avec ton/ta partenaire")
 @app_commands.describe(
     plat="Nom du plat que vous avez goûté",
@@ -87,34 +88,29 @@ async def note(interaction: discord.Interaction, plat: str, note: float):
                 break
 
     username = interaction.user.display_name
-    user_id = str(interaction.user.id)
 
     emoji_note = "🧺"
     emoji_moyenne = "🍯"
 
-    notes = {}
+    notes_dict = {}
     if message_reference:
         embed = message_reference.embeds[0]
-
-        # Extraire les notes existantes depuis les champs
         for field in embed.fields:
-            notes[field.name] = float(field.value.replace("/10", ""))
+            try:
+                notes_dict[field.name] = float(field.value.replace("/10", ""))
+            except:
+                pass
 
-        # Mettre à jour ou ajouter la note de l'utilisateur
-        notes[username] = note
+        notes_dict[username] = note
+        moyenne = round(sum(notes_dict.values()) / len(notes_dict), 2)
 
-        # Recalcul de la moyenne
-        moyenne = round(sum(notes.values()) / len(notes), 2)
-
-        # Construire la description
         description = f"{emoji_note} **Nom du plat** : {plat}\n"
-        for user, n in notes.items():
-            description += f"**{user}** : {n}/10\n"
         description += f"{emoji_moyenne} **Moyenne** : {moyenne}/10"
 
-        # Mettre à jour l'embed
         embed.description = description
         embed.clear_fields()
+        for user, n in notes_dict.items():
+            embed.add_field(name=user, value=f"{n}/10", inline=False)
 
         await message_reference.edit(embed=embed)
         await interaction.followup.send("Ta note a été mise à jour.", ephemeral=True)
@@ -123,7 +119,6 @@ async def note(interaction: discord.Interaction, plat: str, note: float):
         moyenne = round(note, 2)
         description = (
             f"{emoji_note} **Nom du plat** : {plat}\n"
-            f"**{username}** : {note}/10\n"
             f"{emoji_moyenne} **Moyenne** : {moyenne}/10"
         )
         embed = discord.Embed(
@@ -135,7 +130,7 @@ async def note(interaction: discord.Interaction, plat: str, note: float):
         await channel.send(embed=embed)
         await interaction.followup.send("Ton évaluation a été publiée dans un nouvel embed.", ephemeral=True)
 
-
+# /notesperso
 # /notesperso
 @bot.tree.command(name="notesperso", description="Affiche toutes tes notes données aux plats.")
 async def notesperso(interaction: discord.Interaction):
@@ -147,15 +142,20 @@ async def notesperso(interaction: discord.Interaction):
         if message.author != bot.user or not message.embeds:
             continue
         embed = message.embeds[0]
+        if not embed.title or not embed.fields:
+            continue
         plat = embed.title.replace("🍽️ Dégustation : ", "")
         for field in embed.fields:
             if field.name == username:
-                note = field.value.replace("/10", "")
-                notes.append((plat, note))
+                try:
+                    note = float(field.value.replace("/10", ""))
+                    notes.append((plat, note))
+                except:
+                    continue
                 break
 
     if notes:
-        notes.sort(key=lambda x: float(x[1]), reverse=True)
+        notes.sort(key=lambda x: x[1], reverse=True)
         desc = "\n".join([f"**{plat}** : {note}/10" for plat, note in notes])
         embed = discord.Embed(
             title=f"📜 Tes évaluations, {username}",
@@ -309,11 +309,20 @@ async def classement(interaction: discord.Interaction):
             continue
         plat = embed.title.replace("🍽️ Dégustation : ", "")
         try:
-            moyenne_line = embed.description.splitlines()[-1]
-            moyenne = float(moyenne_line.split(":")[1].replace("/10", "").strip())
+            lines = embed.description.splitlines()
+            if not lines:
+                continue
+            last_line = lines[-1]
+            if "Moyenne" not in last_line:
+                continue
+            try:
+                moyenne = float(last_line.split(":")[1].replace("/10", "").strip())
+            except (IndexError, ValueError):
+                continue
+                
             plats.append((plat, moyenne))
-        except Exception:
-            continue
+            except Exception:
+                continue
 
     if plats:
         plats.sort(key=lambda x: x[1], reverse=True)
