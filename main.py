@@ -76,9 +76,9 @@ async def note(interaction: discord.Interaction, plat: str, note: float):
         return
 
     await interaction.response.defer()
-
     channel = interaction.channel
     message_reference = None
+
     async for message in channel.history(limit=100):
         if message.author == bot.user and message.embeds:
             embed = message.embeds[0]
@@ -89,61 +89,54 @@ async def note(interaction: discord.Interaction, plat: str, note: float):
     username = interaction.user.display_name
     user_id = str(interaction.user.id)
 
-    emoji_note = "🧀"
-    emoji_moyenne = "🍷"
+    emoji_note = "🧺"
+    emoji_moyenne = "🍯"
 
-    user_data = {
-        "user_id": user_id,
-        "username": username,
-        "note": note
-    }
-
+    notes = {}
     if message_reference:
         embed = message_reference.embeds[0]
-        fields = embed.fields
-        updated = False
-        other_note = None
-        other_user = None
 
-        for i, field in enumerate(fields):
-            if field.name == username:
-                embed.set_field_at(i, name=username, value=f"{note}/10", inline=False)
-                updated = True
-            else:
-                other_user = field.name
-                other_note = float(field.value.replace("/10", ""))
+        # Extraire les notes existantes depuis les champs
+        for field in embed.fields:
+            notes[field.name] = float(field.value.replace("/10", ""))
 
-        if not updated:
-            embed.add_field(name=username, value=f"{note}/10", inline=False)
+        # Mettre à jour ou ajouter la note de l'utilisateur
+        notes[username] = note
 
-        # Calculer la moyenne si deux notes
-        notes = [note]
-        if other_note is not None:
-            notes.append(other_note)
-        moyenne = round(sum(notes) / len(notes), 2)
+        # Recalcul de la moyenne
+        moyenne = round(sum(notes.values()) / len(notes), 2)
 
-        embed.description = (
-            f"{emoji_note} **Nom du plat** : {plat}\n"
-            f"**{other_user if other_user != username else username}** : {other_note if other_user != username else note}/10\n"
-            f"**{username if username != other_user else other_user}** : {note if username != other_user else other_note}/10\n"
-            f"{emoji_moyenne} **Moyenne** : {moyenne}/10"
-        )
+        # Construire la description
+        description = f"{emoji_note} **Nom du plat** : {plat}\n"
+        for user, n in notes.items():
+            description += f"**{user}** : {n}/10\n"
+        description += f"{emoji_moyenne} **Moyenne** : {moyenne}/10"
+
+        # Mettre à jour l'embed
+        embed.description = description
+        embed.clear_fields()
+        for user, n in notes.items():
+            embed.add_field(name=user, value=f"{n}/10", inline=False)
+
         await message_reference.edit(embed=embed)
-        await interaction.followup.send("Ta note a été mise à jour dans l'embed existant.", ephemeral=True)
+        await interaction.followup.send("Ta note a été mise à jour.", ephemeral=True)
 
     else:
+        moyenne = round(note, 2)
+        description = (
+            f"{emoji_note} **Nom du plat** : {plat}\n"
+            f"**{username}** : {note}/10\n"
+            f"{emoji_moyenne} **Moyenne** : {moyenne}/10"
+        )
         embed = discord.Embed(
             title=f"🍽️ Dégustation : {plat}",
-            description=(
-                f"{emoji_note} **Nom du plat** : {plat}\n"
-                f"**{username}** : {note}/10\n"
-                f"{emoji_moyenne} **Moyenne** : {note}/10"
-            ),
+            description=description,
             color=discord.Color.blurple()
         )
         embed.add_field(name=username, value=f"{note}/10", inline=False)
         await channel.send(embed=embed)
         await interaction.followup.send("Ton évaluation a été publiée dans un nouvel embed.", ephemeral=True)
+
 
 # /notesperso
 @tree.command(name="notesperso", description="Afficher toutes tes notes de plats")
