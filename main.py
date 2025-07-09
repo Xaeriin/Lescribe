@@ -77,45 +77,85 @@ async def stop(ctx):
 
 # --- NOTE ---
 
-@bot.group(invoke_without_command=True)
-async def note(ctx):
-    await ctx.send("Usage : /note add <plat> <note> | /note list")
-
-@note.command()
-async def add(ctx, plat: str, note: int):
-    user = str(ctx.author.display_name)
-    if plat not in notes:
-        notes[plat] = {}
-    notes[plat][user] = note
-
-    embed = discord.Embed(title=f"🍽️ Nom du plat : {plat}", color=discord.Color.gold())
-    users = notes[plat]
-    total = 0
-    count = 0
-    for u, n in users.items():
-        embed.add_field(name=f"👤 {u}", value=f"{n}/10", inline=False)
-        total += n
-        count += 1
-    moyenne = total / count if count else 0
-    embed.add_field(name=f"📊 Moyenne", value=f"{moyenne:.1f}/10", inline=False)
-    await ctx.send(embed=embed)
-
-@note.command()
-async def list(ctx):
-    if not notes:
-        await ctx.send("Aucune note enregistrée.")
+@bot.tree.command(name="note", description="Note un plat avec ton/ta partenaire")
+@app_commands.describe(
+    plat="Nom du plat que vous avez goûté",
+    note="Ta note personnelle sur 10"
+)
+async def note(interaction: discord.Interaction, plat: str, note: float):
+    if not (0 <= note <= 10):
+        await interaction.response.send_message("La note doit être comprise entre 0 et 10.", ephemeral=True)
         return
-    for plat, users in notes.items():
-        embed = discord.Embed(title=f"🍽️ Nom du plat : {plat}", color=discord.Color.gold())
-        total = 0
-        count = 0
-        for u, n in users.items():
-            embed.add_field(name=f"👤 {u}", value=f"{n}/10", inline=False)
-            total += n
-            count += 1
-        moyenne = total / count if count else 0
-        embed.add_field(name=f"📊 Moyenne", value=f"{moyenne:.1f}/10", inline=False)
-        await ctx.send(embed=embed)
+
+    await interaction.response.defer()
+
+    channel = interaction.channel
+    message_reference = None
+    async for message in channel.history(limit=100):
+        if message.author == bot.user and message.embeds:
+            embed = message.embeds[0]
+            if embed.title == f"🍽️ Dégustation : {plat}":
+                message_reference = message
+                break
+
+    username = interaction.user.display_name
+    user_id = str(interaction.user.id)
+
+    emoji_note = "🧀"
+    emoji_moyenne = "🍷"
+
+    user_data = {
+        "user_id": user_id,
+        "username": username,
+        "note": note
+    }
+
+    if message_reference:
+        embed = message_reference.embeds[0]
+        fields = embed.fields
+        updated = False
+        other_note = None
+        other_user = None
+
+        for i, field in enumerate(fields):
+            if field.name == username:
+                embed.set_field_at(i, name=username, value=f"{note}/10", inline=False)
+                updated = True
+            else:
+                other_user = field.name
+                other_note = float(field.value.replace("/10", ""))
+
+        if not updated:
+            embed.add_field(name=username, value=f"{note}/10", inline=False)
+
+        # Calculer la moyenne si deux notes
+        notes = [note]
+        if other_note is not None:
+            notes.append(other_note)
+        moyenne = round(sum(notes) / len(notes), 2)
+
+        embed.description = (
+            f"{emoji_note} **Nom du plat** : {plat}\n"
+            f"**{other_user if other_user != username else username}** : {other_note if other_user != username else note}/10\n"
+            f"**{username if username != other_user else other_user}** : {note if username != other_user else other_note}/10\n"
+            f"{emoji_moyenne} **Moyenne** : {moyenne}/10"
+        )
+        await message_reference.edit(embed=embed)
+        await interaction.followup.send("Ta note a été mise à jour dans l'embed existant.", ephemeral=True)
+
+    else:
+        embed = discord.Embed(
+            title=f"🍽️ Dégustation : {plat}",
+            description=(
+                f"{emoji_note} **Nom du plat** : {plat}\n"
+                f"**{username}** : {note}/10\n"
+                f"{emoji_moyenne} **Moyenne** : {note}/10"
+            ),
+            color=discord.Color.blurple()
+        )
+        embed.add_field(name=username, value=f"{note}/10", inline=False)
+        await channel.send(embed=embed)
+        await interaction.followup.send("Ton évaluation a été publiée dans un nouvel embed.", ephemeral=True)
 
 # --- CLASSEMENT ---
 
