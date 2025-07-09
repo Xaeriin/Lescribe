@@ -31,8 +31,6 @@ films = []        # liste de dicts {nom: str, description: str}
 jeux = []         # liste de dicts {nom: str, description: str}
 rappels = []      # liste de rappels (simple)
 embeds_saved = {} # {embed_name: dict embed}
-note_embeds = {}  # clé = nom du plat, valeur = discord.Message
-
 
 # --- Utilitaires ---
 
@@ -66,45 +64,27 @@ def parse_duration(text: str) -> int:
 
 # --- Commandes ---
 
-# /note
-@tree.command(name="note")
-async def noter(interaction: discord.Interaction, plat: str, note: float):
-    user_id = str(interaction.user.id)
-    username = interaction.user.display_name
+# /note : noter ou modifier une note
+@tree.command(name="note", description="Noter un plat avec ton partenaire")
+@app_commands.describe(plat="Nom du plat", note="Note sur 10")
+async def note(interaction: Interaction, plat: str, note: int):
+    if not (0 <= note <= 10):
+        await interaction.response.send_message("La note doit être entre 0 et 10.", ephemeral=True)
+        return
+    user_notes = notes.setdefault(interaction.user.id, {})
+    user_notes[plat] = note
+    total, count = 0, 0
+    for user_id, plats in notes.items():
+        if plat in plats:
+            total += plats[plat]
+            count += 1
+    moyenne = round(total / count, 2) if count else "N/A"
 
-    if plat not in notes:
-        notes[plat] = {}
+    embed = Embed(title=f"Note pour {plat}", description=f"Moyenne actuelle: {moyenne}/10", color=0x8FBC8F)
+    embed.add_field(name=f"{interaction.user.display_name}", value=f"Ta note : {note}/10", inline=False)
+    await interaction.response.send_message(embed=embed)
 
-    notes[plat][user_id] = note
-
-    # Générer l'embed avec toutes les notes pour ce plat
-    evaluations = [(username if uid == user_id else await bot.fetch_user(int(uid))).display_name, n]
-                  for uid, n in notes[plat].items()]
-    moyenne = round(sum(n for _, n in evaluations) / len(evaluations), 2)
-
-    embed = discord.Embed(title=f"🍽️ Note pour **{plat}**", color=0x8FBC8F)
-    for nom, n in evaluations:
-        embed.add_field(name=f"👤 {nom}", value=f"⭐ {n}/10", inline=False)
-    embed.add_field(name="📊 Moyenne", value=f"**{moyenne}/10**", inline=False)
-
-    # Soit modifier l'ancien message, soit en créer un nouveau
-    if plat in note_embeds:
-        try:
-            msg = note_embeds[plat]
-            await msg.edit(embed=embed)
-            await interaction.response.send_message(f"✅ Ta note pour **{plat}** a été mise à jour !", ephemeral=True)
-        except discord.NotFound:
-            # Si le message n'existe plus, on en recrée un
-            new_msg = await interaction.channel.send(embed=embed)
-            note_embeds[plat] = new_msg
-            await interaction.response.send_message(f"✅ Note mise à jour et nouveau message créé pour **{plat}**.", ephemeral=True)
-    else:
-        new_msg = await interaction.channel.send(embed=embed)
-        note_embeds[plat] = new_msg
-        await interaction.response.send_message(f"✅ Ta note a été enregistrée pour **{plat}**.", ephemeral=True)
-
-
-# /notesperso
+# /notesperso : afficher toutes ses notes
 @tree.command(name="notesperso", description="Afficher toutes tes notes de plats")
 async def notesperso(interaction: Interaction):
     user_notes = notes.get(interaction.user.id, {})
@@ -112,11 +92,11 @@ async def notesperso(interaction: Interaction):
         await interaction.response.send_message("Tu n'as pas encore noté de plat.", ephemeral=True)
         return
     embed = Embed(title=f"Tes notes de plats", color=0xFFD700)
-    for plat, note in user_notes.items():
-        embed.add_field(name=plat, value=f"{note}/10", inline=False)
+    for plat, note_val in user_notes.items():
+        embed.add_field(name=plat, value=f"{note_val}/10", inline=False)
     await interaction.response.send_message(embed=embed)
 
-# /supprnote
+# /supprnote : supprimer une note d'un plat
 @tree.command(name="supprnote", description="Supprimer une note pour un plat")
 @app_commands.describe(plat="Nom du plat à supprimer")
 async def supprnote(interaction: Interaction, plat: str):
@@ -126,6 +106,24 @@ async def supprnote(interaction: Interaction, plat: str):
         await interaction.response.send_message(f"Note supprimée pour {plat}.")
     else:
         await interaction.response.send_message(f"Tu n'as pas de note pour {plat}.", ephemeral=True)
+
+# /classement : afficher le classement des plats selon moyenne
+@tree.command(name="classement", description="Afficher le classement des plats")
+async def classement(interaction: Interaction):
+    moyenne_plats = {}
+    counts = {}
+    for user_id, plats in notes.items():
+        for plat, note_val in plats.items():
+            moyenne_plats[plat] = moyenne_plats.get(plat, 0) + note_val
+            counts[plat] = counts.get(plat, 0) + 1
+    if not moyenne_plats:
+        await interaction.response.send_message("Aucune note de plat pour l'instant.", ephemeral=True)
+        return
+    classement_list = sorted(((plat, moyenne_plats[plat]/counts[plat]) for plat in moyenne_plats), key=lambda x: x[1], reverse=True)
+    embed = Embed(title="Classement des plats", color=0xFFD700)
+    for plat, moyenne in classement_list:
+        embed.add_field(name=plat, value=f"Moyenne: {moyenne:.2f}/10", inline=False)
+    await interaction.response.send_message(embed=embed)
 
 # /supprjeu (ajout)
 @tree.command(name="supprjeu", description="Supprimer un jeu de la liste")
@@ -211,24 +209,6 @@ async def ajoutjeu(interaction: Interaction, nom: str, description: str):
     jeux.append({"nom": nom, "description": description})
     await interaction.response.send_message(f"Jeu '{nom}' ajouté.")
 
-# /classement (classement des plats selon moyenne)
-@tree.command(name="classement", description="Afficher le classement des plats")
-async def classement(interaction: Interaction):
-    moyenne_plats = {}
-    counts = {}
-    for user_id, plats in notes.items():
-        for plat, note in plats.items():
-            moyenne_plats[plat] = moyenne_plats.get(plat, 0) + note
-            counts[plat] = counts.get(plat, 0) + 1
-    if not moyenne_plats:
-        await interaction.response.send_message("Aucune note de plat pour l'instant.", ephemeral=True)
-        return
-    classement = sorted(((plat, moyenne_plats[plat]/counts[plat]) for plat in moyenne_plats), key=lambda x: x[1], reverse=True)
-    embed = Embed(title="Classement des plats", color=0xFFD700)
-    for plat, moyenne in classement:
-        embed.add_field(name=plat, value=f"Moyenne: {moyenne:.2f}/10", inline=False)
-    await interaction.response.send_message(embed=embed)
-
 # --- Embed Creator & Modifier avec interface interactive ---
 
 class EmbedEditorView(ui.View):
@@ -281,57 +261,21 @@ class EmbedEditorView(ui.View):
         await interaction.followup.send(f"Description modifiée.", ephemeral=True)
         await self.update_message()
 
-    @ui.button(label="Modifier Couleur", style=discord.ButtonStyle.primary)
-    async def modify_color(self, interaction: Interaction, button: ui.Button):
-        await interaction.response.send_message("Envoie la nouvelle couleur HEX (ex: #FF00FF) :", ephemeral=True)
-
-        def check(m):
-            return m.author.id == interaction.user.id and m.channel == interaction.channel and re.match(r"^#?[0-9A-Fa-f]{6}$", m.content)
-
-        try:
-            msg = await bot.wait_for('message', check=check, timeout=60)
-        except asyncio.TimeoutError:
-            await interaction.followup.send("Temps écoulé ou format invalide.", ephemeral=True)
-            return
-        color_hex = msg.content.strip().lstrip('#')
-        self.embed.color = int(color_hex, 16)
-        await interaction.followup.send(f"Couleur modifiée en #{color_hex.upper()}.", ephemeral=True)
-        await self.update_message()
-
-
-    @ui.button(label="Ajouter Image", style=discord.ButtonStyle.secondary)
-    async def add_image(self, interaction: Interaction, button: ui.Button):
-        await interaction.response.send_message("Envoie une **URL d'image ou GIF** valide :", ephemeral=True)
-
-        def check(m):
-            return m.author.id == interaction.user.id and m.channel == interaction.channel and m.content.startswith("http")
-
-        try:
-            msg = await bot.wait_for('message', check=check, timeout=60)
-        except asyncio.TimeoutError:
-            await interaction.followup.send("⏳ Temps écoulé ou URL invalide.", ephemeral=True)
-            return
-        self.embed.set_image(url=msg.content)
-        await interaction.followup.send("✅ Image ajoutée à l'embed.", ephemeral=True)
-        await self.update_message()
-
-
-    @ui.button(label="Sauvegarder", style=discord.ButtonStyle.success)
-    async def save_embed(self, interaction: Interaction, button: ui.Button):
+    @ui.button(label="Sauvegarder et Quitter", style=discord.ButtonStyle.success)
+    async def save_and_quit(self, interaction: Interaction, button: ui.Button):
         embeds_saved[self.name] = self.embed.to_dict()
-        await interaction.response.send_message(f"Embed '{self.name}' sauvegardé !", ephemeral=True)
-        self.stop()
-
-    @ui.button(label="Annuler", style=discord.ButtonStyle.danger)
-    async def cancel(self, interaction: Interaction, button: ui.Button):
-        await interaction.response.send_message("Modification annulée.", ephemeral=True)
+        await interaction.response.send_message(f"Embed '{self.name}' sauvegardé.", ephemeral=True)
         self.stop()
 
 # /embedcreer
 @tree.command(name="embedcreer", description="Créer un embed modifiable")
-async def embedcreer(interaction: Interaction):
-    embed = Embed(title="Titre par défaut", description="Description par défaut", color=0x3498db)
-    view = EmbedEditorView(embed, name=f"embed_{interaction.user.id}", user_id=interaction.user.id)
+@app_commands.describe(nom="Nom de l'embed à créer")
+async def embedcreer(interaction: Interaction, nom: str):
+    if nom in embeds_saved:
+        await interaction.response.send_message("Un embed avec ce nom existe déjà.", ephemeral=True)
+        return
+    embed = Embed(title="Titre par défaut", description="Description par défaut", color=0x3498DB)
+    view = EmbedEditorView(embed, nom, interaction.user.id)
     await interaction.response.send_message(embed=embed, view=view)
     view.message = await interaction.original_response()
 
@@ -339,85 +283,83 @@ async def embedcreer(interaction: Interaction):
 @tree.command(name="embedmodifier", description="Modifier un embed sauvegardé")
 @app_commands.describe(nom="Nom de l'embed à modifier")
 async def embedmodifier(interaction: Interaction, nom: str):
-    saved = embeds_saved.get(nom)
-    if not saved:
-        await interaction.response.send_message(f"Aucun embed nommé '{nom}'.", ephemeral=True)
+    if nom not in embeds_saved:
+        await interaction.response.send_message("Aucun embed avec ce nom.", ephemeral=True)
         return
-    embed = Embed.from_dict(saved)
-    view = EmbedEditorView(embed, name=nom, user_id=interaction.user.id)
+    embed_dict = embeds_saved[nom]
+    embed = Embed.from_dict(embed_dict)
+    view = EmbedEditorView(embed, nom, interaction.user.id)
     await interaction.response.send_message(embed=embed, view=view)
     view.message = await interaction.original_response()
 
-# /rappel
-@tree.command(name="rappel", description="Créer un rappel")
-@app_commands.describe(message="Message du rappel", temps="Temps (ex: 1h30m, 2j)")
+# --- Rappel ---
+@tree.command(name="rappel", description="Créer un rappel dans X temps")
+@app_commands.describe(message="Message du rappel", temps="Durée (ex: 1h30m)")
 async def rappel(interaction: Interaction, message: str, temps: str):
     secondes = parse_duration(temps)
     if secondes <= 0:
         await interaction.response.send_message("Durée invalide.", ephemeral=True)
         return
-    await interaction.response.send_message(f"Rappel créé dans {temps}.", ephemeral=True)
-    await asyncio.sleep(secondes)
-    await interaction.channel.send(f"⏰ Rappel : {message}")
+    await interaction.response.send_message(f"Rappel créé pour dans {temps}.")
 
-# /comptearebours
+    async def rappel_task():
+        await asyncio.sleep(secondes)
+        try:
+            await interaction.user.send(f"Rappel: {message}")
+        except:
+            pass
+
+    bot.loop.create_task(rappel_task())
+
+# --- Compte à rebours ---
 @tree.command(name="comptearebours", description="Créer un compte à rebours")
-@app_commands.describe(temps="Temps (ex: 1h30m, 2j)")
+@app_commands.describe(temps="Durée (ex: 2j3h)")
 async def comptearebours(interaction: Interaction, temps: str):
     secondes = parse_duration(temps)
     if secondes <= 0:
         await interaction.response.send_message("Durée invalide.", ephemeral=True)
         return
-    embed = Embed(title="Compte à rebours", description=f"Temps restant : {temps}", color=0xFF4500)
-    message = await interaction.response.send_message(embed=embed)
 
-    # Affichage approximatif: update toutes les 10 secondes
-    start = asyncio.get_event_loop().time()
-    end = start + secondes
-    msg = await interaction.original_response()
-    task = asyncio.create_task(asyncio.sleep(0))  # dummy pour déclaration
-    comptearebours_tasks[interaction.user.id] = asyncio.current_task()
-    while True:
-        now = asyncio.get_event_loop().time()
-        reste = int(end - now)
-        if reste <= 0:
-            break
-        # Formattage du temps restant en j h m s
-        j = reste // 86400
-        h = (reste % 86400) // 3600
-        m = (reste % 3600) // 60
-        s = reste % 60
-        desc = f"Temps restant : {j}j {h}h {m}m {s}s"
-        new_embed = Embed(title="Compte à rebours", description=desc, color=0xFF4500)
+    message = await interaction.response.send_message(f"Compte à rebours : {temps} démarré.", ephemeral=False)
+
+    async def countdown():
+        remaining = secondes
+        while remaining > 0:
+            heures, rem = divmod(remaining, 3600)
+            minutes, secondes_ = divmod(rem, 60)
+            await asyncio.sleep(1)
+            remaining -= 1
+            try:
+                await message.edit(content=f"Temps restant : {heures}h {minutes}m {secondes_}s")
+            except:
+                break
         try:
-            await msg.edit(embed=new_embed)
+            await message.edit(content="⏰ Compte à rebours terminé !")
         except:
-            break
-        await asyncio.sleep(10)
-    # Fin du compte à rebours
-    await msg.edit(embed=Embed(title="Compte à rebours terminé !", color=0x32CD32))
-    await interaction.channel.send("⏰ Le compte à rebours est terminé!")
+            pass
 
-# compte à rebours stop
-@tree.command(name="compteareboursstop", description="Annule ton compte à rebours en cours")
-async def compteareboursstop(interaction: Interaction):
-    task = comptearebours_tasks.pop(interaction.user.id, None)
-    if task and not task.done():
-        task.cancel()
-        await interaction.response.send_message("⛔ Ton compte à rebours a été annulé.")
-    else:
-        await interaction.response.send_message("❌ Aucun compte à rebours en cours.", ephemeral=True)
+    bot.loop.create_task(countdown())
 
-comptearebours_tasks = {}
+# --- Bot start ---
 
-
-# --- Events ---
 @bot.event
 async def on_ready():
-    print(f"Connecté en tant que {bot.user}")
-    await tree.sync()
+    print(f"Connecté en tant que {bot.user} (ID: {bot.user.id})")
+    try:
+        synced = await tree.sync()
+        print(f"Commande slash synchronisées ({len(synced)})")
+    except Exception as e:
+        print(f"Erreur sync: {e}")
 
-# --- Main ---
-if __name__ == "__main__":
+def main():
+    # Lancer Flask dans un thread
     threading.Thread(target=run_flask).start()
-    bot.run(os.environ["TOKEN"])
+    # Lancer Discord bot
+    TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+    if not TOKEN:
+        print("Pas de token dans les variables d'environnement.")
+        return
+    bot.run(TOKEN)
+
+if __name__ == "__main__":
+    main()
